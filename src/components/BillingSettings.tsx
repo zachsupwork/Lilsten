@@ -10,23 +10,41 @@ import { supabase } from "@/integrations/supabase/client";
 // Initialize Stripe (use your publishable key)
 const stripePromise = loadStripe("YOUR_PUBLISHABLE_KEY");
 
+interface BillingSettings {
+  setup_fee_cents: number;
+  monthly_fee_cents: number;
+  call_cost_multiplier: number;
+}
+
+interface UserBilling {
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  credit_balance_cents: number;
+  next_billing_date: string | null;
+}
+
 const BillingSettings = () => {
   const [loading, setLoading] = useState(false);
-  const [billingInfo, setBillingInfo] = useState<any>(null);
+  const [billingInfo, setBillingInfo] = useState<BillingSettings | null>(null);
   const [setupIntent, setSetupIntent] = useState<string | null>(null);
   const { toast } = useToast();
-  const [session] = useState(() => supabase.auth.getSession());
+  const [session, setSession] = useState<any>(null);
 
   useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+    });
     loadBillingInfo();
   }, []);
 
   const loadBillingInfo = async () => {
     try {
-      const { data: billingSettings } = await supabase
+      const { data: billingSettings, error } = await supabase
         .from("billing_settings")
         .select("*")
         .single();
+
+      if (error) throw error;
 
       if (billingSettings) {
         setBillingInfo(billingSettings);
@@ -42,28 +60,28 @@ const BillingSettings = () => {
   };
 
   const setupBilling = async () => {
-    if (!session) return;
+    if (!session?.user) return;
 
     setLoading(true);
     try {
       // Create Stripe customer
-      const { data: customerData } = await supabase.functions.invoke(
+      const { data: customerData, error: customerError } = await supabase.functions.invoke(
         "stripe-billing",
         {
           body: {
             action: "createCustomer",
-            email: session.user?.email,
-            userId: session.user?.id,
+            email: session.user.email,
+            userId: session.user.id,
           },
         }
       );
 
-      if (!customerData?.customerId) {
+      if (customerError || !customerData?.customerId) {
         throw new Error("Failed to create Stripe customer");
       }
 
       // Create SetupIntent
-      const { data: setupData } = await supabase.functions.invoke(
+      const { data: setupData, error: setupError } = await supabase.functions.invoke(
         "stripe-billing",
         {
           body: {
@@ -73,41 +91,43 @@ const BillingSettings = () => {
         }
       );
 
-      if (!setupData?.clientSecret) {
+      if (setupError || !setupData?.clientSecret) {
         throw new Error("Failed to create setup intent");
       }
 
       setSetupIntent(setupData.clientSecret);
 
       // Create subscription and charge setup fee
-      const { data: subscriptionData } = await supabase.functions.invoke(
+      const { data: subscriptionData, error: subscriptionError } = await supabase.functions.invoke(
         "stripe-billing",
         {
           body: {
             action: "createSubscription",
             customerId: customerData.customerId,
-            userId: session.user?.id,
-            setupFee: billingInfo.setup_fee,
-            monthlyFee: billingInfo.monthly_fee,
-            currentCallCost: billingInfo.call_cost_multiplier,
+            userId: session.user.id,
+            setupFeeCents: billingInfo?.setup_fee_cents,
+            monthlyFeeCents: billingInfo?.monthly_fee_cents,
+            callCostMultiplier: billingInfo?.call_cost_multiplier,
           },
         }
       );
 
-      if (!subscriptionData?.subscriptionId) {
+      if (subscriptionError || !subscriptionData?.subscriptionId) {
         throw new Error("Failed to create subscription");
       }
 
       // Update user_billing record
-      await supabase
+      const { error: updateError } = await supabase
         .from("user_billing")
         .upsert({
-          user_id: session.user?.id,
+          user_id: session.user.id,
           stripe_customer_id: customerData.customerId,
           stripe_subscription_id: subscriptionData.subscriptionId,
-          credit_balance: billingInfo.setup_fee + billingInfo.monthly_fee,
-          last_monthly_charge: new Date().toISOString(),
+          credit_balance_cents: billingInfo ? billingInfo.setup_fee_cents + billingInfo.monthly_fee_cents : 0,
+          next_billing_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
         });
+
+      if (updateError) throw updateError;
 
       toast({
         title: "Billing setup complete",
@@ -125,6 +145,10 @@ const BillingSettings = () => {
     }
   };
 
+  const formatCurrency = (cents: number) => {
+    return `$${(cents / 100).toFixed(2)}`;
+  };
+
   return (
     <Card>
       <CardHeader>
@@ -133,8 +157,8 @@ const BillingSettings = () => {
       <CardContent className="space-y-4">
         {billingInfo && (
           <div className="space-y-2">
-            <p>Setup Fee: ${billingInfo.setup_fee}</p>
-            <p>Monthly Fee: ${billingInfo.monthly_fee}/month</p>
+            <p>Setup Fee: {formatCurrency(billingInfo.setup_fee_cents)}</p>
+            <p>Monthly Fee: {formatCurrency(billingInfo.monthly_fee_cents)}/month</p>
             <p>
               Call Cost Multiplier: {billingInfo.call_cost_multiplier}x standard
               rate

@@ -18,41 +18,15 @@ import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import BillingSettings from "@/components/BillingSettings";
 
-interface CallData {
-  call_type: "web_call" | "phone_call";
-  call_id: string;
-  agent_id: string;
-  call_status: "registered" | "ongoing" | "ended" | "error";
-  start_timestamp?: number;
-  end_timestamp?: number;
-  duration_ms?: number;
-  from_number?: string;
-  to_number?: string;
-  direction?: "inbound" | "outbound";
-  disconnection_reason?: string;
-  call_analysis?: {
-    call_summary: string;
-    user_sentiment: "Positive" | "Negative" | "Neutral" | "Unknown";
-    call_successful: boolean;
-    in_voicemail?: boolean;
-  };
-  call_cost?: {
-    product_costs: {
-      product: string;
-      unitPrice: number;
-      cost: number;
-    }[];
-    total_duration_seconds: number;
-    total_duration_unit_price: number;
-    total_one_time_price: number;
-    combined_cost: number;
-  };
+interface UserBilling {
+  credit_balance_cents: number;
+  stripe_subscription_id: string | null;
 }
 
 const Index = () => {
-  const [calls, setCalls] = useState<CallData[]>([]);
+  const [calls, setCalls] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [userBilling, setUserBilling] = useState<any>(null);
+  const [userBilling, setUserBilling] = useState<UserBilling | null>(null);
   const { toast } = useToast();
 
   const fetchCalls = async () => {
@@ -76,24 +50,17 @@ const Index = () => {
 
       for (const call of response) {
         if (call.call_cost && userBilling?.stripe_subscription_id) {
-          if (userBilling.credit_balance < 0) {
-            await supabase.functions.invoke('stripe-billing', {
-              body: {
-                action: 'reportUsage',
-                subscriptionId: userBilling.stripe_subscription_id,
-                creditBalance: userBilling.credit_balance,
-                units: call.call_cost.combined_cost,
-              },
-            });
+          const costInCents = Math.round(call.call_cost.combined_cost * 100);
+          const { error: updateError } = await supabase
+            .from("user_billing")
+            .update({ 
+              credit_balance_cents: userBilling.credit_balance_cents - (costInCents * 3)
+            })
+            .eq('stripe_subscription_id', userBilling.stripe_subscription_id);
+
+          if (updateError) {
+            console.error('Error updating credit balance:', updateError);
           }
-
-          const newBalance = userBilling.credit_balance - (call.call_cost.combined_cost * 3);
-          await supabase
-            .from('user_billing')
-            .update({ credit_balance: newBalance })
-            .eq('user_id', userBilling.user_id);
-
-          setUserBilling(prev => ({ ...prev, credit_balance: newBalance }));
         }
       }
 
@@ -115,9 +82,9 @@ const Index = () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.user) {
         const { data: billing } = await supabase
-          .from('user_billing')
-          .select('*')
-          .eq('user_id', session.user.id)
+          .from("user_billing")
+          .select("credit_balance_cents, stripe_subscription_id")
+          .eq("user_id", session.user.id)
           .single();
         
         setUserBilling(billing);
@@ -186,7 +153,7 @@ const Index = () => {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                Credit Balance: ${userBilling.credit_balance.toFixed(2)}
+                Credit Balance: ${(userBilling.credit_balance_cents / 100).toFixed(2)}
               </div>
             </CardContent>
           </Card>

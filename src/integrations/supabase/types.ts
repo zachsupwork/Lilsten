@@ -9,6 +9,33 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
+      billing_settings: {
+        Row: {
+          call_cost_multiplier: number
+          created_at: string
+          id: string
+          monthly_fee_cents: number
+          setup_fee_cents: number
+          updated_at: string
+        }
+        Insert: {
+          call_cost_multiplier?: number
+          created_at?: string
+          id?: string
+          monthly_fee_cents?: number
+          setup_fee_cents?: number
+          updated_at?: string
+        }
+        Update: {
+          call_cost_multiplier?: number
+          created_at?: string
+          id?: string
+          monthly_fee_cents?: number
+          setup_fee_cents?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           created_at: string
@@ -57,12 +84,56 @@ export type Database = {
         }
         Relationships: []
       }
+      user_billing: {
+        Row: {
+          created_at: string
+          credit_balance_cents: number
+          id: string
+          next_billing_date: string | null
+          stripe_customer_id: string | null
+          stripe_subscription_id: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          credit_balance_cents?: number
+          id?: string
+          next_billing_date?: string | null
+          stripe_customer_id?: string | null
+          stripe_subscription_id?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          credit_balance_cents?: number
+          id?: string
+          next_billing_date?: string | null
+          stripe_customer_id?: string | null
+          stripe_subscription_id?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_billing_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      process_monthly_billing: {
+        Args: Record<PropertyKey, never>
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never
