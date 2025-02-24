@@ -1,6 +1,6 @@
 
 import { useEffect, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -9,11 +9,46 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { Menu, Home, Phone, Video, List, Plus, PhoneOutgoing, PhoneIncoming, UserPlus, Users } from "lucide-react";
+import { Menu, Home, Phone, Video, List, Plus, PhoneOutgoing, PhoneIncoming, UserPlus, Users, LogIn, LogOut } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 
 const SideMenu = () => {
   const [open, setOpen] = useState(false);
+  const [session, setSession] = useState<any>(null);
   const location = useLocation();
+  const navigate = useNavigate();
+  const { toast } = useToast();
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleSignOut = async () => {
+    try {
+      await supabase.auth.signOut();
+      navigate("/auth");
+      toast({
+        title: "Signed out successfully",
+      });
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Error signing out",
+        description: error.message,
+      });
+    }
+  };
 
   const menuItems = [
     { icon: Home, label: "Home", path: "/" },
@@ -52,24 +87,50 @@ const SideMenu = () => {
         </SheetHeader>
         <nav className="mt-8">
           <ul className="space-y-2">
-            {menuItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = location.pathname === item.path;
-              
-              return (
-                <li key={item.path}>
-                  <Link to={item.path}>
-                    <Button
-                      variant={isActive ? "default" : "ghost"}
-                      className="w-full justify-start gap-2"
-                    >
-                      <Icon className="h-5 w-5" />
-                      {item.label}
-                    </Button>
-                  </Link>
+            {session ? (
+              <>
+                {menuItems.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = location.pathname === item.path;
+                  
+                  return (
+                    <li key={item.path}>
+                      <Link to={item.path}>
+                        <Button
+                          variant={isActive ? "default" : "ghost"}
+                          className="w-full justify-start gap-2"
+                        >
+                          <Icon className="h-5 w-5" />
+                          {item.label}
+                        </Button>
+                      </Link>
+                    </li>
+                  );
+                })}
+                <li>
+                  <Button
+                    variant="ghost"
+                    className="w-full justify-start gap-2 text-red-500 hover:text-red-600 hover:bg-red-50"
+                    onClick={handleSignOut}
+                  >
+                    <LogOut className="h-5 w-5" />
+                    Sign Out
+                  </Button>
                 </li>
-              );
-            })}
+              </>
+            ) : (
+              <li>
+                <Link to="/auth">
+                  <Button
+                    variant="default"
+                    className="w-full justify-start gap-2"
+                  >
+                    <LogIn className="h-5 w-5" />
+                    Sign In
+                  </Button>
+                </Link>
+              </li>
+            )}
           </ul>
         </nav>
       </SheetContent>
