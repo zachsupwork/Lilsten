@@ -21,10 +21,14 @@ const SideMenu = () => {
   const { toast } = useToast();
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    // Get initial session
+    const getInitialSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
       setSession(session);
-    });
+    };
+    getInitialSession();
 
+    // Listen for auth changes
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
