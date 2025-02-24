@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from "react";
 import {
   Table,
@@ -17,6 +16,7 @@ import { formatDistanceToNow } from "date-fns";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
+import BillingSettings from "@/components/BillingSettings";
 
 interface CallData {
   call_type: "web_call" | "phone_call";
@@ -52,12 +52,12 @@ interface CallData {
 const Index = () => {
   const [calls, setCalls] = useState<CallData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [userBilling, setUserBilling] = useState<any>(null);
   const { toast } = useToast();
 
   const fetchCalls = async () => {
     try {
       setLoading(true);
-      console.log('Fetching calls data...');
       
       const { data: response, error } = await supabase.functions.invoke(
         'retell-calls',
@@ -69,18 +69,34 @@ const Index = () => {
         }
       );
 
-      if (error) {
-        console.error('Error from Supabase:', error);
-        throw error;
-      }
-
-      // Ensure response is an array
+      if (error) throw error;
       if (!Array.isArray(response)) {
-        console.error('Received unexpected response format:', response);
         throw new Error('Invalid response format from API');
       }
 
-      console.log('Setting calls data:', response);
+      for (const call of response) {
+        if (call.call_cost && userBilling?.stripe_subscription_id) {
+          if (userBilling.credit_balance < 0) {
+            await supabase.functions.invoke('stripe-billing', {
+              body: {
+                action: 'reportUsage',
+                subscriptionId: userBilling.stripe_subscription_id,
+                creditBalance: userBilling.credit_balance,
+                units: call.call_cost.combined_cost,
+              },
+            });
+          }
+
+          const newBalance = userBilling.credit_balance - (call.call_cost.combined_cost * 3);
+          await supabase
+            .from('user_billing')
+            .update({ credit_balance: newBalance })
+            .eq('user_id', userBilling.user_id);
+
+          setUserBilling(prev => ({ ...prev, credit_balance: newBalance }));
+        }
+      }
+
       setCalls(response);
     } catch (err: any) {
       console.error('Error fetching calls:', err);
@@ -95,6 +111,20 @@ const Index = () => {
   };
 
   useEffect(() => {
+    const loadUserBilling = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        const { data: billing } = await supabase
+          .from('user_billing')
+          .select('*')
+          .eq('user_id', session.user.id)
+          .single();
+        
+        setUserBilling(billing);
+      }
+    };
+
+    loadUserBilling();
     fetchCalls();
   }, []);
 
@@ -145,142 +175,162 @@ const Index = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 py-8 px-4 sm:px-6 lg:px-8">
-      <Card className="max-w-7xl mx-auto">
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="flex items-center gap-2">
-            <Phone className="h-6 w-6" />
-            Call History
-          </CardTitle>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={fetchCalls}
-            className="flex items-center gap-2"
-          >
-            <RefreshCcw className="h-4 w-4" />
-            Refresh
-          </Button>
-        </CardHeader>
-        <CardContent>
-          <div className="relative overflow-x-auto rounded-lg">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[100px]">Status</TableHead>
-                  <TableHead>Call ID</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Direction</TableHead>
-                  <TableHead>From</TableHead>
-                  <TableHead>To</TableHead>
-                  <TableHead>Start Time</TableHead>
-                  <TableHead>Duration</TableHead>
-                  <TableHead>Cost</TableHead>
-                  <TableHead>Sentiment</TableHead>
-                  <TableHead>Success</TableHead>
-                  <TableHead>Disconnect Reason</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loading ? (
-                  Array.from({ length: 5 }).map((_, i) => (
-                    <TableRow key={i}>
-                      {Array.from({ length: 12 }).map((_, j) => (
-                        <TableCell key={j}>
-                          <Skeleton className="h-4 w-[100px]" />
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  ))
-                ) : calls.length > 0 ? (
-                  calls.map((call) => (
-                    <TableRow key={call.call_id}>
-                      <TableCell>
-                        <Badge className={`${getStatusColor(call.call_status)} text-white`}>
-                          {call.call_status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Link 
-                          to={`/calls/${call.call_id}`}
-                          className="text-blue-500 hover:text-blue-700 font-mono text-sm"
-                        >
-                          {call.call_id}
-                        </Link>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center">
-                          {call.call_type === "web_call" ? (
-                            <Video className="h-4 w-4 mr-1" />
-                          ) : (
-                            <Phone className="h-4 w-4 mr-1" />
-                          )}
-                          <span className="capitalize">{call.call_type.replace('_', ' ')}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {call.direction && (
-                          <Badge variant="secondary" className="capitalize">
-                            {call.direction}
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="font-mono text-sm">{call.from_number || '-'}</TableCell>
-                      <TableCell className="font-mono text-sm">{call.to_number || '-'}</TableCell>
-                      <TableCell>
-                        {call.start_timestamp ? (
-                          <div className="flex items-center gap-1">
-                            <Clock className="h-4 w-4 text-gray-500" />
-                            {formatDistanceToNow(call.start_timestamp, { addSuffix: true })}
-                          </div>
-                        ) : '-'}
-                      </TableCell>
-                      <TableCell>
-                        {call.duration_ms ? formatDuration(call.duration_ms) : '-'}
-                      </TableCell>
-                      <TableCell>
-                        {call.call_cost ? (
-                          <div className="flex items-center gap-1">
-                            <DollarSign className="h-4 w-4 text-gray-500" />
-                            {(call.call_cost.combined_cost / 100).toFixed(2)}
-                          </div>
-                        ) : '-'}
-                      </TableCell>
-                      <TableCell>
-                        {call.call_analysis?.user_sentiment ? (
-                          <Badge className={`${getSentimentColor(call.call_analysis.user_sentiment)} text-white`}>
-                            {call.call_analysis.user_sentiment}
-                          </Badge>
-                        ) : '-'}
-                      </TableCell>
-                      <TableCell>
-                        {call.call_analysis?.call_successful !== undefined ? (
-                          <Badge className={call.call_analysis.call_successful ? 'bg-green-500' : 'bg-red-500'}>
-                            {call.call_analysis.call_successful ? 'Yes' : 'No'}
-                          </Badge>
-                        ) : '-'}
-                      </TableCell>
-                      <TableCell>
-                        {call.disconnection_reason ? (
-                          <div className="flex items-center gap-1 text-sm">
-                            <AlertTriangle className="h-4 w-4 text-yellow-500" />
-                            {getDisconnectionReason(call.disconnection_reason)}
-                          </div>
-                        ) : '-'}
-                      </TableCell>
-                    </TableRow>
-                  ))
-                ) : (
+      <div className="max-w-7xl mx-auto space-y-8">
+        {userBilling && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <DollarSign className="h-6 w-6" />
+                Billing Overview
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">
+                Credit Balance: ${userBilling.credit_balance.toFixed(2)}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {!userBilling?.stripe_subscription_id && <BillingSettings />}
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <Phone className="h-6 w-6" />
+              Call History
+            </CardTitle>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={fetchCalls}
+              className="flex items-center gap-2"
+            >
+              <RefreshCcw className="h-4 w-4" />
+              Refresh
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <div className="relative overflow-x-auto rounded-lg">
+              <Table>
+                <TableHeader>
                   <TableRow>
-                    <TableCell colSpan={12} className="text-center py-8">
-                      No calls found
-                    </TableCell>
+                    <TableHead className="w-[100px]">Status</TableHead>
+                    <TableHead>Call ID</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Direction</TableHead>
+                    <TableHead>From</TableHead>
+                    <TableHead>To</TableHead>
+                    <TableHead>Start Time</TableHead>
+                    <TableHead>Duration</TableHead>
+                    <TableHead>Cost</TableHead>
+                    <TableHead>Sentiment</TableHead>
+                    <TableHead>Success</TableHead>
+                    <TableHead>Disconnect Reason</TableHead>
                   </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </div>
-        </CardContent>
-      </Card>
+                </TableHeader>
+                <TableBody>
+                  {loading ? (
+                    Array.from({ length: 5 }).map((_, i) => (
+                      <TableRow key={i}>
+                        {Array.from({ length: 12 }).map((_, j) => (
+                          <TableCell key={j}>
+                            <Skeleton className="h-4 w-[100px]" />
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    ))
+                  ) : calls.length > 0 ? (
+                    calls.map((call) => (
+                      <TableRow key={call.call_id}>
+                        <TableCell>
+                          <Badge className={`${getStatusColor(call.call_status)} text-white`}>
+                            {call.call_status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Link 
+                            to={`/calls/${call.call_id}`}
+                            className="text-blue-500 hover:text-blue-700 font-mono text-sm"
+                          >
+                            {call.call_id}
+                          </Link>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center">
+                            {call.call_type === "web_call" ? (
+                              <Video className="h-4 w-4 mr-1" />
+                            ) : (
+                              <Phone className="h-4 w-4 mr-1" />
+                            )}
+                            <span className="capitalize">{call.call_type.replace('_', ' ')}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {call.direction && (
+                            <Badge variant="secondary" className="capitalize">
+                              {call.direction}
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="font-mono text-sm">{call.from_number || '-'}</TableCell>
+                        <TableCell className="font-mono text-sm">{call.to_number || '-'}</TableCell>
+                        <TableCell>
+                          {call.start_timestamp ? (
+                            <div className="flex items-center gap-1">
+                              <Clock className="h-4 w-4 text-gray-500" />
+                              {formatDistanceToNow(call.start_timestamp, { addSuffix: true })}
+                            </div>
+                          ) : '-'}
+                        </TableCell>
+                        <TableCell>
+                          {call.duration_ms ? formatDuration(call.duration_ms) : '-'}
+                        </TableCell>
+                        <TableCell>
+                          {call.call_cost ? (
+                            <div className="flex items-center gap-1">
+                              <DollarSign className="h-4 w-4 text-gray-500" />
+                              {(call.call_cost.combined_cost / 100).toFixed(2)}
+                            </div>
+                          ) : '-'}
+                        </TableCell>
+                        <TableCell>
+                          {call.call_analysis?.user_sentiment ? (
+                            <Badge className={`${getSentimentColor(call.call_analysis.user_sentiment)} text-white`}>
+                              {call.call_analysis.user_sentiment}
+                            </Badge>
+                          ) : '-'}
+                        </TableCell>
+                        <TableCell>
+                          {call.call_analysis?.call_successful !== undefined ? (
+                            <Badge className={call.call_analysis.call_successful ? 'bg-green-500' : 'bg-red-500'}>
+                              {call.call_analysis.call_successful ? 'Yes' : 'No'}
+                            </Badge>
+                          ) : '-'}
+                        </TableCell>
+                        <TableCell>
+                          {call.disconnection_reason ? (
+                            <div className="flex items-center gap-1 text-sm">
+                              <AlertTriangle className="h-4 w-4 text-yellow-500" />
+                              {getDisconnectionReason(call.disconnection_reason)}
+                            </div>
+                          ) : '-'}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={12} className="text-center py-8">
+                        No calls found
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 };
