@@ -84,6 +84,9 @@ const BillingSettings = () => {
     try {
       const amount = billingInfo ? billingInfo.setup_fee_cents + billingInfo.monthly_fee_cents : 5000; // Default to $50 if no billing info
       
+      // Get the current access token
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      
       const { data, error } = await supabase.functions.invoke(
         'stripe-billing',
         {
@@ -92,6 +95,9 @@ const BillingSettings = () => {
             userId: session.user.id,
             amount: amount,
           },
+          headers: {
+            Authorization: `Bearer ${currentSession?.access_token}`,
+          }
         }
       );
 
@@ -125,6 +131,8 @@ const BillingSettings = () => {
 
   const handlePaymentSuccess = async (sessionId: string) => {
     try {
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      
       const { data, error } = await supabase.functions.invoke(
         'stripe-billing',
         {
@@ -132,6 +140,9 @@ const BillingSettings = () => {
             action: 'handlePaymentSuccess',
             sessionId: sessionId,
           },
+          headers: {
+            Authorization: `Bearer ${currentSession?.access_token}`,
+          }
         }
       );
 

@@ -40,12 +40,18 @@ Deno.serve(async (req) => {
       authHeader.replace('Bearer ', '')
     )
 
-    if (authError || !user) {
+    if (authError) {
+      console.error('Auth error:', authError)
       throw new Error('Invalid session')
     }
 
-    const { action, userId, amount } = await req.json()
-    console.log(`Processing ${action} for user ${userId} with amount ${amount}`)
+    if (!user) {
+      console.error('No user found')
+      throw new Error('No user found')
+    }
+
+    const { action, userId, amount, sessionId } = await req.json()
+    console.log(`Processing ${action} for user ${userId}`)
 
     if (action === 'createPaymentSession') {
       // Verify that the requesting user matches the intended userId
