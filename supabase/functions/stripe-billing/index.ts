@@ -29,10 +29,30 @@ Deno.serve(async (req) => {
     const corsResponse = handleCors(req)
     if (corsResponse) return corsResponse
 
+    // Get auth token from request header
+    const authHeader = req.headers.get('Authorization')
+    if (!authHeader) {
+      throw new Error('No authorization header')
+    }
+
+    // Verify the user session
+    const { data: { user }, error: authError } = await supabaseClient.auth.getUser(
+      authHeader.replace('Bearer ', '')
+    )
+
+    if (authError || !user) {
+      throw new Error('Invalid session')
+    }
+
     const { action, userId, amount } = await req.json()
     console.log(`Processing ${action} for user ${userId} with amount ${amount}`)
 
     if (action === 'createPaymentSession') {
+      // Verify that the requesting user matches the intended userId
+      if (user.id !== userId) {
+        throw new Error('Unauthorized: User ID mismatch')
+      }
+
       const { data: billingSettings, error: billingError } = await supabaseClient
         .from('billing_settings')
         .select('*')
@@ -41,7 +61,6 @@ Deno.serve(async (req) => {
       if (billingError) throw billingError
 
       let priceId
-      // Select the appropriate price ID based on the total amount
       const totalAmount = billingSettings.setup_fee_cents + billingSettings.monthly_fee_cents
       
       if (totalAmount <= 15000) { // $150
@@ -85,7 +104,6 @@ Deno.serve(async (req) => {
         const userId = session.metadata?.userId
         const amountPaid = session.amount_total // Amount in cents
 
-        // Update user's credit balance
         const { error: updateError } = await supabaseClient
           .from('user_billing')
           .upsert({
