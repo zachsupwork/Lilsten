@@ -16,17 +16,54 @@ const Auth = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
 
+  const createStripeCustomer = async (userId: string, userEmail: string) => {
+    try {
+      const { data, error } = await supabase.functions.invoke("stripe-billing", {
+        body: {
+          action: "createCustomer",
+          email: userEmail,
+          userId: userId,
+        },
+      });
+
+      if (error) throw error;
+      
+      // Initialize user_billing record with default values
+      const { error: billingError } = await supabase
+        .from("user_billing")
+        .insert({
+          user_id: userId,
+          stripe_customer_id: data.customerId,
+          credit_balance_cents: 0,
+          next_billing_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+        });
+
+      if (billingError) throw billingError;
+
+      return data.customerId;
+    } catch (error: any) {
+      console.error("Error creating Stripe customer:", error);
+      throw new Error("Failed to create Stripe customer");
+    }
+  };
+
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
 
     try {
       if (isSignUp) {
-        const { error } = await supabase.auth.signUp({
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
           email,
           password,
         });
-        if (error) throw error;
+        
+        if (signUpError) throw signUpError;
+        
+        if (signUpData.user) {
+          // Create Stripe customer after successful signup
+          await createStripeCustomer(signUpData.user.id, signUpData.user.email || email);
+        }
         
         toast({
           title: "Account created",
