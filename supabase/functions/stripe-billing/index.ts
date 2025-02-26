@@ -33,15 +33,30 @@ Deno.serve(async (req) => {
     console.log(`Processing ${action} for user ${userId} with amount ${amount}`)
 
     if (action === 'createPaymentSession') {
+      const { data: billingSettings, error: billingError } = await supabaseClient
+        .from('billing_settings')
+        .select('*')
+        .single()
+
+      if (billingError) throw billingError
+
+      let priceId
+      // Select the appropriate price ID based on the total amount
+      const totalAmount = billingSettings.setup_fee_cents + billingSettings.monthly_fee_cents
+      
+      if (totalAmount <= 15000) { // $150
+        priceId = 'price_1QwZ0uByONQ6hwN8cghyKMTr'
+      } else if (totalAmount <= 25000) { // $250
+        priceId = 'price_1QwZ1OByONQ6hwN8cHVNJgJP'
+      } else {
+        priceId = 'price_1QwZ2MByONQ6hwN81gRUV81O'
+      }
+
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         line_items: [
           {
-            price_data: {
-              currency: 'usd',
-              product: 'prod_default', // Replace with your actual product ID
-              unit_amount: amount,
-            },
+            price: priceId,
             quantity: 1,
           },
         ],
