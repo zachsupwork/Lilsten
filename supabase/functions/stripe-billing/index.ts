@@ -1,6 +1,6 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.38.0'
-import { stripe } from 'https://esm.sh/stripe@13.8.0'
+import Stripe from 'https://esm.sh/stripe@13.8.0'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -19,7 +19,7 @@ const supabaseClient = createClient(
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 )
 
-const stripeClient = new stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
+const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
   apiVersion: '2023-10-16',
 })
 
@@ -33,17 +33,14 @@ Deno.serve(async (req) => {
     console.log(`Processing ${action} for user ${userId} with amount ${amount}`)
 
     if (action === 'createPaymentSession') {
-      const session = await stripeClient.checkout.sessions.create({
+      const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         line_items: [
           {
             price_data: {
               currency: 'usd',
-              product_data: {
-                name: 'Call Credits',
-                description: 'Credits for making calls',
-              },
-              unit_amount: amount, // Amount in cents
+              product: 'prod_default', // Replace with your actual product ID
+              unit_amount: amount,
             },
             quantity: 1,
           },
@@ -67,7 +64,7 @@ Deno.serve(async (req) => {
     
     else if (action === 'handlePaymentSuccess') {
       const { sessionId } = await req.json()
-      const session = await stripeClient.checkout.sessions.retrieve(sessionId)
+      const session = await stripe.checkout.sessions.retrieve(sessionId)
 
       if (session.payment_status === 'paid') {
         const userId = session.metadata?.userId
