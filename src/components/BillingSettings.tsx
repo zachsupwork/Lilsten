@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from "react";
 import { Elements } from "@stripe/react-stripe-js";
 import { loadStripe } from "@stripe/stripe-js";
@@ -27,13 +28,32 @@ const BillingSettings = () => {
   const [setupIntent, setSetupIntent] = useState<string | null>(null);
   const { toast } = useToast();
   const [session, setSession] = useState<any>(null);
+  const [userBilling, setUserBilling] = useState<UserBilling | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
     });
     loadBillingInfo();
+    loadUserBillingInfo();
   }, []);
+
+  const loadUserBillingInfo = async () => {
+    try {
+      if (!session?.user?.id) return;
+
+      const { data, error } = await supabase
+        .from('user_billing')
+        .select('*')
+        .eq('user_id', session.user.id)
+        .single();
+
+      if (error) throw error;
+      setUserBilling(data);
+    } catch (error: any) {
+      console.error('Error loading user billing info:', error);
+    }
+  };
 
   const loadBillingInfo = async () => {
     try {
@@ -58,7 +78,14 @@ const BillingSettings = () => {
   };
 
   const setupBilling = async () => {
-    if (!session?.user) return;
+    if (!session?.user) {
+      toast({
+        variant: "destructive",
+        title: "Authentication required",
+        description: "Please sign in to set up billing.",
+      });
+      return;
+    }
 
     setLoading(true);
     try {
@@ -77,7 +104,7 @@ const BillingSettings = () => {
       );
 
       if (customerError || !customerData?.customerId) {
-        console.error('Customer creation error:', customerError);
+        console.error('Customer creation error:', customerError || 'No customer ID returned');
         throw new Error(customerError?.message || "Failed to create Stripe customer");
       }
 
@@ -99,7 +126,7 @@ const BillingSettings = () => {
       );
 
       if (subscriptionError || !subscriptionData?.subscriptionId) {
-        console.error('Subscription creation error:', subscriptionError);
+        console.error('Subscription creation error:', subscriptionError || 'No subscription ID returned');
         throw new Error(subscriptionError?.message || "Failed to create subscription");
       }
 
@@ -121,6 +148,8 @@ const BillingSettings = () => {
         throw updateError;
       }
 
+      await loadUserBillingInfo();
+
       toast({
         title: "Billing setup complete",
         description: "Your billing information has been saved successfully.",
@@ -130,7 +159,7 @@ const BillingSettings = () => {
       toast({
         variant: "destructive",
         title: "Error setting up billing",
-        description: error.message,
+        description: error.message || "An unexpected error occurred while setting up billing",
       });
     } finally {
       setLoading(false);
@@ -157,13 +186,23 @@ const BillingSettings = () => {
             </p>
           </div>
         )}
-        <Button
-          onClick={setupBilling}
-          disabled={loading || !billingInfo}
-          className="w-full"
-        >
-          {loading ? "Setting up..." : "Set Up Billing"}
-        </Button>
+        {userBilling && (
+          <div className="space-y-2 pt-4 border-t">
+            <p>Current Credit Balance: {formatCurrency(userBilling.credit_balance_cents)}</p>
+            {userBilling.next_billing_date && (
+              <p>Next Billing Date: {new Date(userBilling.next_billing_date).toLocaleDateString()}</p>
+            )}
+          </div>
+        )}
+        {!userBilling?.stripe_subscription_id && (
+          <Button
+            onClick={setupBilling}
+            disabled={loading || !billingInfo}
+            className="w-full"
+          >
+            {loading ? "Setting up..." : "Set Up Billing"}
+          </Button>
+        )}
       </CardContent>
     </Card>
   );

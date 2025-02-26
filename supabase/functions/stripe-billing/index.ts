@@ -1,112 +1,145 @@
 
-import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
-import Stripe from "https://esm.sh/stripe@12.1.1?target=deno";
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import Stripe from 'https://esm.sh/stripe@12.0.0?target=deno';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+}
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') || '', {
+  apiVersion: '2023-10-16',
   httpClient: Stripe.createFetchHttpClient(),
 });
 
-serve(async (req) => {
-  try {
-    // Handle CORS preflight requests
-    if (req.method === 'OPTIONS') {
-      return new Response(null, { headers: corsHeaders });
-    }
+const supabaseUrl = Deno.env.get('SUPABASE_URL');
+const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
-    const { action, email, userId, customerId, setupFeeCents, monthlyFeeCents, callCostMultiplier } = await req.json();
+if (!supabaseUrl || !supabaseKey) {
+  throw new Error('Missing Supabase environment variables');
+}
+
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+serve(async (req) => {
+  // Handle CORS preflight requests
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  try {
+    const { action, ...data } = await req.json();
+    console.log(`Received request for action: ${action}`, data);
 
     switch (action) {
-      case 'createCustomer':
-        console.log('Creating Stripe customer:', { email, userId });
+      case 'createCustomer': {
+        const { email, userId } = data;
         if (!email || !userId) {
-          throw new Error('Email and userId are required');
+          throw new Error('Missing required fields for customer creation');
         }
 
+        console.log(`Creating customer for email: ${email}`);
         const customer = await stripe.customers.create({
           email,
-          metadata: { userId },
-        });
-
-        console.log('Customer created successfully:', customer.id);
-        return new Response(
-          JSON.stringify({ customerId: customer.id }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-
-      case 'setupIntent':
-        console.log('Creating setup intent for customer:', customerId);
-        const setupIntent = await stripe.setupIntents.create({
-          customer: customerId,
-          payment_method_types: ['card'],
-        });
-
-        return new Response(
-          JSON.stringify({ clientSecret: setupIntent.client_secret }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-
-      case 'createSubscription':
-        console.log('Creating subscription:', { customerId, setupFeeCents, monthlyFeeCents });
-        if (!customerId) {
-          throw new Error('Customer ID is required');
-        }
-
-        // First, retrieve the customer to ensure they exist
-        await stripe.customers.retrieve(customerId);
-
-        // Create the subscription with metered usage
-        const subscription = await stripe.subscriptions.create({
-          customer: customerId,
-          items: [{
-            price_data: {
-              currency: 'usd',
-              product_data: {
-                name: 'AI Call Usage',
-                metadata: {
-                  call_cost_multiplier: callCostMultiplier || 3.0,
-                },
-              },
-              recurring: {
-                interval: 'month',
-                usage_type: 'metered',
-              },
-              unit_amount_decimal: '0.01', // 1 cent per unit
-            },
-          }],
-          payment_settings: {
-            payment_method_types: ['card'],
-            save_default_payment_method: 'on_subscription',
-          },
           metadata: {
             userId,
-            setupFeeCents: setupFeeCents?.toString(),
-            monthlyFeeCents: monthlyFeeCents?.toString(),
+          },
+        });
+        console.log('Customer created:', customer.id);
+
+        return new Response(
+          JSON.stringify({ customerId: customer.id }),
+          {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 200,
+          },
+        );
+      }
+
+      case 'createSubscription': {
+        const { customerId, userId, setupFeeCents, monthlyFeeCents, callCostMultiplier } = data;
+        if (!customerId || !userId) {
+          throw new Error('Missing required fields for subscription creation');
+        }
+
+        console.log(`Creating subscription for customer: ${customerId}`);
+
+        // Create the subscription with both the base plan and metered usage
+        const subscription = await stripe.subscriptions.create({
+          customer: customerId,
+          items: [
+            {
+              price: 'price_1Qm5idByONQ6hwN80JEFyi9u', // Base plan price ID
+            },
+            {
+              price: 'price_1QmJTdByONQ6hwN8r7WICskN', // Metered usage price ID
+            },
+          ],
+          payment_behavior: 'default_incomplete',
+          collection_method: 'charge_automatically',
+          metadata: {
+            userId,
+            setupFeeCents,
+            monthlyFeeCents,
+            callCostMultiplier,
           },
         });
 
-        console.log('Subscription created successfully:', subscription.id);
+        console.log('Subscription created:', subscription.id);
 
         return new Response(
           JSON.stringify({ subscriptionId: subscription.id }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 200,
+          },
+        );
+      }
+
+      case 'reportUsage': {
+        const { subscriptionItemId, quantity } = data;
+        if (!subscriptionItemId || quantity === undefined) {
+          throw new Error('Missing required fields for usage reporting');
+        }
+
+        console.log(`Reporting usage for subscription item: ${subscriptionItemId}, quantity: ${quantity}`);
+        
+        const usageRecord = await stripe.subscriptionItems.createUsageRecord(
+          subscriptionItemId,
+          {
+            quantity,
+            timestamp: 'now',
+            action: 'increment',
+          }
         );
 
-      default:
-        throw new Error('Unknown action');
-    }
-  } catch (error: any) {
-    console.error('Stripe billing error:', error);
-    return new Response(
-      JSON.stringify({ error: error.message }),
-      { 
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        console.log('Usage record created:', usageRecord.id);
+
+        return new Response(
+          JSON.stringify({ usageRecordId: usageRecord.id }),
+          {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 200,
+          },
+        );
       }
+
+      default:
+        throw new Error(`Unknown action: ${action}`);
+    }
+  } catch (error) {
+    console.error('Error processing request:', error);
+    
+    return new Response(
+      JSON.stringify({ 
+        error: error.message || 'An unexpected error occurred',
+        details: error.type || error.code || 'unknown'
+      }),
+      {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 400,
+      },
     );
   }
 });
