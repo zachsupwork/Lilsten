@@ -1,145 +1,117 @@
 
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import Stripe from 'https://esm.sh/stripe@12.0.0?target=deno';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.38.0'
+import { stripe } from 'https://esm.sh/stripe@13.8.0'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') || '', {
-  apiVersion: '2023-10-16',
-  httpClient: Stripe.createFetchHttpClient(),
-});
-
-const supabaseUrl = Deno.env.get('SUPABASE_URL');
-const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-
-if (!supabaseUrl || !supabaseKey) {
-  throw new Error('Missing Supabase environment variables');
+// Handle CORS preflight requests
+const handleCors = (req: Request) => {
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { headers: corsHeaders })
+  }
 }
 
-const supabase = createClient(supabaseUrl, supabaseKey);
+const supabaseClient = createClient(
+  Deno.env.get('SUPABASE_URL') ?? '',
+  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+)
 
-serve(async (req) => {
-  // Handle CORS preflight requests
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
+const stripeClient = new stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
+  apiVersion: '2023-10-16',
+})
 
+Deno.serve(async (req) => {
   try {
-    const { action, ...data } = await req.json();
-    console.log(`Received request for action: ${action}`, data);
+    // Handle CORS
+    const corsResponse = handleCors(req)
+    if (corsResponse) return corsResponse
 
-    switch (action) {
-      case 'createCustomer': {
-        const { email, userId } = data;
-        if (!email || !userId) {
-          throw new Error('Missing required fields for customer creation');
-        }
+    const { action, userId, amount } = await req.json()
+    console.log(`Processing ${action} for user ${userId} with amount ${amount}`)
 
-        console.log(`Creating customer for email: ${email}`);
-        const customer = await stripe.customers.create({
-          email,
-          metadata: {
-            userId,
-          },
-        });
-        console.log('Customer created:', customer.id);
-
-        return new Response(
-          JSON.stringify({ customerId: customer.id }),
+    if (action === 'createPaymentSession') {
+      const session = await stripeClient.checkout.sessions.create({
+        payment_method_types: ['card'],
+        line_items: [
           {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            status: 200,
-          },
-        );
-      }
-
-      case 'createSubscription': {
-        const { customerId, userId, setupFeeCents, monthlyFeeCents, callCostMultiplier } = data;
-        if (!customerId || !userId) {
-          throw new Error('Missing required fields for subscription creation');
-        }
-
-        console.log(`Creating subscription for customer: ${customerId}`);
-
-        // Create the subscription with both the base plan and metered usage
-        const subscription = await stripe.subscriptions.create({
-          customer: customerId,
-          items: [
-            {
-              price: 'price_1Qm5idByONQ6hwN80JEFyi9u', // Base plan price ID
+            price_data: {
+              currency: 'usd',
+              product_data: {
+                name: 'Call Credits',
+                description: 'Credits for making calls',
+              },
+              unit_amount: amount, // Amount in cents
             },
-            {
-              price: 'price_1QmJTdByONQ6hwN8r7WICskN', // Metered usage price ID
-            },
-          ],
-          payment_behavior: 'default_incomplete',
-          collection_method: 'charge_automatically',
-          metadata: {
-            userId,
-            setupFeeCents,
-            monthlyFeeCents,
-            callCostMultiplier,
+            quantity: 1,
           },
-        });
+        ],
+        mode: 'payment',
+        success_url: `${req.headers.get('origin')}/calls?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${req.headers.get('origin')}/calls`,
+        metadata: {
+          userId: userId,
+        },
+      })
 
-        console.log('Subscription created:', subscription.id);
-
-        return new Response(
-          JSON.stringify({ subscriptionId: subscription.id }),
-          {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            status: 200,
-          },
-        );
-      }
-
-      case 'reportUsage': {
-        const { subscriptionItemId, quantity } = data;
-        if (!subscriptionItemId || quantity === undefined) {
-          throw new Error('Missing required fields for usage reporting');
+      return new Response(
+        JSON.stringify({ sessionUrl: session.url }),
+        {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200,
         }
-
-        console.log(`Reporting usage for subscription item: ${subscriptionItemId}, quantity: ${quantity}`);
-        
-        const usageRecord = await stripe.subscriptionItems.createUsageRecord(
-          subscriptionItemId,
-          {
-            quantity,
-            timestamp: 'now',
-            action: 'increment',
-          }
-        );
-
-        console.log('Usage record created:', usageRecord.id);
-
-        return new Response(
-          JSON.stringify({ usageRecordId: usageRecord.id }),
-          {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            status: 200,
-          },
-        );
-      }
-
-      default:
-        throw new Error(`Unknown action: ${action}`);
-    }
-  } catch (error) {
-    console.error('Error processing request:', error);
+      )
+    } 
     
+    else if (action === 'handlePaymentSuccess') {
+      const { sessionId } = await req.json()
+      const session = await stripeClient.checkout.sessions.retrieve(sessionId)
+
+      if (session.payment_status === 'paid') {
+        const userId = session.metadata?.userId
+        const amountPaid = session.amount_total // Amount in cents
+
+        // Update user's credit balance
+        const { error: updateError } = await supabaseClient
+          .from('user_billing')
+          .upsert({
+            user_id: userId,
+            credit_balance_cents: amountPaid,
+          })
+
+        if (updateError) {
+          console.error('Error updating credit balance:', updateError)
+          throw updateError
+        }
+
+        return new Response(
+          JSON.stringify({ success: true, creditBalance: amountPaid }),
+          {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 200,
+          }
+        )
+      }
+    }
+
     return new Response(
-      JSON.stringify({ 
-        error: error.message || 'An unexpected error occurred',
-        details: error.type || error.code || 'unknown'
-      }),
+      JSON.stringify({ error: 'Invalid action' }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 400,
-      },
-    );
+      }
+    )
+
+  } catch (error) {
+    console.error('Error:', error)
+    return new Response(
+      JSON.stringify({ error: error.message }),
+      {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 500,
+      }
+    )
   }
-});
+})

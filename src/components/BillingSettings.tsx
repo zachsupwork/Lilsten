@@ -1,13 +1,9 @@
 
 import { useEffect, useState } from "react";
-import { Elements } from "@stripe/react-stripe-js";
-import { loadStripe } from "@stripe/stripe-js";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-
-const stripePromise = loadStripe("pk_test_51Lcuo7ByONQ6hwN8gUOzq0AwshsrVERzHtQCUxQWfDBBAo6b8BQ8nUyTUqI6YIcAz3sriDyVigVRD2276EMJh9S200CUlrWUaX");
 
 interface BillingSettings {
   setup_fee_cents: number;
@@ -16,8 +12,6 @@ interface BillingSettings {
 }
 
 interface UserBilling {
-  stripe_customer_id: string | null;
-  stripe_subscription_id: string | null;
   credit_balance_cents: number;
   next_billing_date: string | null;
 }
@@ -25,7 +19,6 @@ interface UserBilling {
 const BillingSettings = () => {
   const [loading, setLoading] = useState(false);
   const [billingInfo, setBillingInfo] = useState<BillingSettings | null>(null);
-  const [setupIntent, setSetupIntent] = useState<string | null>(null);
   const { toast } = useToast();
   const [session, setSession] = useState<any>(null);
   const [userBilling, setUserBilling] = useState<UserBilling | null>(null);
@@ -77,92 +70,87 @@ const BillingSettings = () => {
     }
   };
 
-  const setupBilling = async () => {
+  const redirectToPayment = async () => {
     if (!session?.user) {
       toast({
         variant: "destructive",
         title: "Authentication required",
-        description: "Please sign in to set up billing.",
+        description: "Please sign in to make a payment.",
       });
       return;
     }
 
     setLoading(true);
     try {
-      console.log('Starting billing setup for user:', session.user.email);
+      const amount = billingInfo ? billingInfo.setup_fee_cents + billingInfo.monthly_fee_cents : 5000; // Default to $50 if no billing info
       
-      // Step 1: Create Stripe customer
-      const { data: customerData, error: customerError } = await supabase.functions.invoke(
-        "stripe-billing",
+      const { data, error } = await supabase.functions.invoke(
+        'stripe-billing',
         {
           body: {
-            action: "createCustomer",
-            email: session.user.email,
+            action: 'createPaymentSession',
             userId: session.user.id,
+            amount: amount,
           },
         }
       );
 
-      if (customerError || !customerData?.customerId) {
-        console.error('Customer creation error:', customerError || 'No customer ID returned');
-        throw new Error(customerError?.message || "Failed to create Stripe customer");
+      if (error) throw error;
+
+      // Redirect to Stripe Checkout
+      if (data?.sessionUrl) {
+        window.location.href = data.sessionUrl;
       }
-
-      console.log('Customer created:', customerData.customerId);
-
-      // Step 2: Create subscription with metered billing
-      const { data: subscriptionData, error: subscriptionError } = await supabase.functions.invoke(
-        "stripe-billing",
-        {
-          body: {
-            action: "createSubscription",
-            customerId: customerData.customerId,
-            userId: session.user.id,
-            setupFeeCents: billingInfo?.setup_fee_cents,
-            monthlyFeeCents: billingInfo?.monthly_fee_cents,
-            callCostMultiplier: billingInfo?.call_cost_multiplier,
-          },
-        }
-      );
-
-      if (subscriptionError || !subscriptionData?.subscriptionId) {
-        console.error('Subscription creation error:', subscriptionError || 'No subscription ID returned');
-        throw new Error(subscriptionError?.message || "Failed to create subscription");
-      }
-
-      console.log('Subscription created:', subscriptionData.subscriptionId);
-
-      // Step 3: Update user_billing record
-      const { error: updateError } = await supabase
-        .from("user_billing")
-        .upsert({
-          user_id: session.user.id,
-          stripe_customer_id: customerData.customerId,
-          stripe_subscription_id: subscriptionData.subscriptionId,
-          credit_balance_cents: billingInfo ? billingInfo.setup_fee_cents + billingInfo.monthly_fee_cents : 0,
-          next_billing_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-        });
-
-      if (updateError) {
-        console.error('Billing record update error:', updateError);
-        throw updateError;
-      }
-
-      await loadUserBillingInfo();
-
-      toast({
-        title: "Billing setup complete",
-        description: "Your billing information has been saved successfully.",
-      });
     } catch (error: any) {
-      console.error("Error setting up billing:", error);
+      console.error('Error creating payment session:', error);
       toast({
         variant: "destructive",
-        title: "Error setting up billing",
-        description: error.message || "An unexpected error occurred while setting up billing",
+        title: "Error setting up payment",
+        description: error.message || "Failed to create payment session",
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    // Check for successful payment
+    const queryParams = new URLSearchParams(window.location.search);
+    const sessionId = queryParams.get('session_id');
+
+    if (sessionId) {
+      handlePaymentSuccess(sessionId);
+    }
+  }, []);
+
+  const handlePaymentSuccess = async (sessionId: string) => {
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        'stripe-billing',
+        {
+          body: {
+            action: 'handlePaymentSuccess',
+            sessionId: sessionId,
+          },
+        }
+      );
+
+      if (error) throw error;
+
+      if (data?.success) {
+        toast({
+          title: "Payment successful",
+          description: "Your payment has been processed and credits have been added to your account.",
+        });
+        loadUserBillingInfo(); // Refresh the billing info
+      }
+    } catch (error: any) {
+      console.error('Error handling payment success:', error);
+      toast({
+        variant: "destructive",
+        title: "Error processing payment",
+        description: error.message || "Failed to process payment confirmation",
+      });
     }
   };
 
@@ -178,12 +166,8 @@ const BillingSettings = () => {
       <CardContent className="space-y-4">
         {billingInfo && (
           <div className="space-y-2">
-            <p>Setup Fee: {formatCurrency(billingInfo.setup_fee_cents)}</p>
-            <p>Monthly Fee: {formatCurrency(billingInfo.monthly_fee_cents)}/month</p>
-            <p>
-              Call Cost Multiplier: {billingInfo.call_cost_multiplier}x standard
-              rate
-            </p>
+            <p>Initial Payment: {formatCurrency(billingInfo.setup_fee_cents + billingInfo.monthly_fee_cents)}</p>
+            <p>Call Cost Multiplier: {billingInfo.call_cost_multiplier}x standard rate</p>
           </div>
         )}
         {userBilling && (
@@ -194,15 +178,13 @@ const BillingSettings = () => {
             )}
           </div>
         )}
-        {!userBilling?.stripe_subscription_id && (
-          <Button
-            onClick={setupBilling}
-            disabled={loading || !billingInfo}
-            className="w-full"
-          >
-            {loading ? "Setting up..." : "Set Up Billing"}
-          </Button>
-        )}
+        <Button
+          onClick={redirectToPayment}
+          disabled={loading}
+          className="w-full"
+        >
+          {loading ? "Processing..." : "Add Credits"}
+        </Button>
       </CardContent>
     </Card>
   );
