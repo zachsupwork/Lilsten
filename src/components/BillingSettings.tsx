@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from "react";
 import { Elements } from "@stripe/react-stripe-js";
 import { loadStripe } from "@stripe/stripe-js";
@@ -7,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 
-const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || "");
+const stripePromise = loadStripe("pk_test_51Lcuo7ByONQ6hwN8gUOzq0AwshsrVERzHtQCUxQWfDBBAo6b8BQ8nUyTUqI6YIcAz3sriDyVigVRD2276EMJh9S200CUlrWUaX");
 
 interface BillingSettings {
   setup_fee_cents: number;
