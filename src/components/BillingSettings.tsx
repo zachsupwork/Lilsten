@@ -7,8 +7,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 
-// Initialize Stripe (use your publishable key)
-const stripePromise = loadStripe("YOUR_PUBLISHABLE_KEY");
+const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || "");
 
 interface BillingSettings {
   setup_fee_cents: number;
@@ -64,7 +63,9 @@ const BillingSettings = () => {
 
     setLoading(true);
     try {
-      // Create Stripe customer
+      console.log('Starting billing setup for user:', session.user.email);
+      
+      // Step 1: Create Stripe customer
       const { data: customerData, error: customerError } = await supabase.functions.invoke(
         "stripe-billing",
         {
@@ -77,27 +78,13 @@ const BillingSettings = () => {
       );
 
       if (customerError || !customerData?.customerId) {
-        throw new Error("Failed to create Stripe customer");
+        console.error('Customer creation error:', customerError);
+        throw new Error(customerError?.message || "Failed to create Stripe customer");
       }
 
-      // Create SetupIntent
-      const { data: setupData, error: setupError } = await supabase.functions.invoke(
-        "stripe-billing",
-        {
-          body: {
-            action: "setupIntent",
-            customerId: customerData.customerId,
-          },
-        }
-      );
+      console.log('Customer created:', customerData.customerId);
 
-      if (setupError || !setupData?.clientSecret) {
-        throw new Error("Failed to create setup intent");
-      }
-
-      setSetupIntent(setupData.clientSecret);
-
-      // Create subscription and charge setup fee
+      // Step 2: Create subscription with metered billing
       const { data: subscriptionData, error: subscriptionError } = await supabase.functions.invoke(
         "stripe-billing",
         {
@@ -113,10 +100,13 @@ const BillingSettings = () => {
       );
 
       if (subscriptionError || !subscriptionData?.subscriptionId) {
-        throw new Error("Failed to create subscription");
+        console.error('Subscription creation error:', subscriptionError);
+        throw new Error(subscriptionError?.message || "Failed to create subscription");
       }
 
-      // Update user_billing record
+      console.log('Subscription created:', subscriptionData.subscriptionId);
+
+      // Step 3: Update user_billing record
       const { error: updateError } = await supabase
         .from("user_billing")
         .upsert({
@@ -127,7 +117,10 @@ const BillingSettings = () => {
           next_billing_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
         });
 
-      if (updateError) throw updateError;
+      if (updateError) {
+        console.error('Billing record update error:', updateError);
+        throw updateError;
+      }
 
       toast({
         title: "Billing setup complete",
@@ -165,22 +158,13 @@ const BillingSettings = () => {
             </p>
           </div>
         )}
-        {setupIntent ? (
-          <Elements
-            stripe={stripePromise}
-            options={{ clientSecret: setupIntent }}
-          >
-            {/* Add Stripe Elements payment form component here */}
-          </Elements>
-        ) : (
-          <Button
-            onClick={setupBilling}
-            disabled={loading || !billingInfo}
-            className="w-full"
-          >
-            {loading ? "Setting up..." : "Set Up Billing"}
-          </Button>
-        )}
+        <Button
+          onClick={setupBilling}
+          disabled={loading || !billingInfo}
+          className="w-full"
+        >
+          {loading ? "Setting up..." : "Set Up Billing"}
+        </Button>
       </CardContent>
     </Card>
   );

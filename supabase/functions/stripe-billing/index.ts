@@ -7,21 +7,17 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// Initialize Stripe with the secret key
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') || '', {
   httpClient: Stripe.createFetchHttpClient(),
 });
 
-const SUBSCRIPTION_PRICE_ID = 'price_1Qm5idByONQ6hwN80JEFyi9u';
-const METERED_USAGE_PRICE_ID = 'price_1QmJTdByONQ6hwN8r7WICskN';
-
 serve(async (req) => {
-  // Handle CORS preflight requests
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
-
   try {
+    // Handle CORS preflight requests
+    if (req.method === 'OPTIONS') {
+      return new Response(null, { headers: corsHeaders });
+    }
+
     const { action, email, userId, customerId, setupFeeCents, monthlyFeeCents, callCostMultiplier } = await req.json();
 
     switch (action) {
@@ -33,88 +29,84 @@ serve(async (req) => {
 
         const customer = await stripe.customers.create({
           email,
-          metadata: {
-            userId
-          }
+          metadata: { userId },
         });
 
         console.log('Customer created successfully:', customer.id);
-        return new Response(JSON.stringify({ customerId: customer.id }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
+        return new Response(
+          JSON.stringify({ customerId: customer.id }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
 
       case 'setupIntent':
+        console.log('Creating setup intent for customer:', customerId);
         const setupIntent = await stripe.setupIntents.create({
           customer: customerId,
           payment_method_types: ['card'],
         });
-        return new Response(JSON.stringify({ clientSecret: setupIntent.client_secret }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
 
-      case 'createSubscription':
-        // Create a subscription with both the fixed monthly price and metered usage
-        const subscription = await stripe.subscriptions.create({
-          customer: customerId,
-          items: [
-            {
-              price: SUBSCRIPTION_PRICE_ID, // Monthly subscription price
-            },
-            {
-              price: METERED_USAGE_PRICE_ID, // Metered usage price
-            }
-          ],
-          payment_behavior: 'default_incomplete',
-          payment_settings: {
-            save_default_payment_method: 'on_subscription',
-          },
-          expand: ['latest_invoice.payment_intent'],
-          metadata: {
-            userId,
-          },
-        });
-
-        // If there's a setup fee, create a one-time invoice item
-        if (setupFeeCents > 0) {
-          await stripe.invoiceItems.create({
-            customer: customerId,
-            amount: setupFeeCents,
-            currency: 'usd',
-            description: 'One-time setup fee',
-          });
-        }
-
-        return new Response(JSON.stringify({
-          subscriptionId: subscription.id,
-          clientSecret: subscription.latest_invoice?.payment_intent?.client_secret,
-        }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-
-      case 'reportUsage':
-        const { subscriptionItemId, quantity } = await req.json();
-        
-        const usageRecord = await stripe.subscriptionItems.createUsageRecord(
-          subscriptionItemId,
-          {
-            quantity,
-            timestamp: 'now',
-            action: 'increment',
-          }
+        return new Response(
+          JSON.stringify({ clientSecret: setupIntent.client_secret }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
 
-        return new Response(JSON.stringify({ usageRecord }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      case 'createSubscription':
+        console.log('Creating subscription:', { customerId, setupFeeCents, monthlyFeeCents });
+        if (!customerId) {
+          throw new Error('Customer ID is required');
+        }
+
+        // First, retrieve the customer to ensure they exist
+        await stripe.customers.retrieve(customerId);
+
+        // Create the subscription with metered usage
+        const subscription = await stripe.subscriptions.create({
+          customer: customerId,
+          items: [{
+            price_data: {
+              currency: 'usd',
+              product_data: {
+                name: 'AI Call Usage',
+                metadata: {
+                  call_cost_multiplier: callCostMultiplier || 3.0,
+                },
+              },
+              recurring: {
+                interval: 'month',
+                usage_type: 'metered',
+              },
+              unit_amount_decimal: '0.01', // 1 cent per unit
+            },
+          }],
+          payment_settings: {
+            payment_method_types: ['card'],
+            save_default_payment_method: 'on_subscription',
+          },
+          metadata: {
+            userId,
+            setupFeeCents: setupFeeCents?.toString(),
+            monthlyFeeCents: monthlyFeeCents?.toString(),
+          },
         });
+
+        console.log('Subscription created successfully:', subscription.id);
+
+        return new Response(
+          JSON.stringify({ subscriptionId: subscription.id }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
 
       default:
         throw new Error('Unknown action');
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error('Stripe billing error:', error);
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return new Response(
+      JSON.stringify({ error: error.message }),
+      { 
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      }
+    );
   }
 });
