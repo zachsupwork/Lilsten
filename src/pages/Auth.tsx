@@ -18,6 +18,8 @@ const Auth = () => {
 
   const createStripeCustomer = async (userId: string, userEmail: string) => {
     try {
+      console.log('Creating Stripe customer for:', { userId, userEmail });
+      
       const { data, error } = await supabase.functions.invoke("stripe-billing", {
         body: {
           action: "createCustomer",
@@ -26,8 +28,21 @@ const Auth = () => {
         },
       });
 
-      if (error) throw error;
+      if (error) {
+        console.error('Supabase function error:', error);
+        throw error;
+      }
+
+      if (!data?.customerId) {
+        console.error('No customerId returned:', data);
+        throw new Error('No customer ID returned from Stripe');
+      }
       
+      console.log('Creating user_billing record with:', {
+        userId,
+        stripeCustomerId: data.customerId,
+      });
+
       // Initialize user_billing record with default values
       const { error: billingError } = await supabase
         .from("user_billing")
@@ -38,12 +53,15 @@ const Auth = () => {
           next_billing_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
         });
 
-      if (billingError) throw billingError;
+      if (billingError) {
+        console.error('Error creating billing record:', billingError);
+        throw billingError;
+      }
 
       return data.customerId;
     } catch (error: any) {
-      console.error("Error creating Stripe customer:", error);
-      throw new Error("Failed to create Stripe customer");
+      console.error("Error in createStripeCustomer:", error);
+      throw new Error(error.message || "Failed to create Stripe customer");
     }
   };
 
@@ -53,22 +71,29 @@ const Auth = () => {
 
     try {
       if (isSignUp) {
+        console.log('Signing up user:', email);
         const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
           email,
           password,
         });
         
-        if (signUpError) throw signUpError;
-        
-        if (signUpData.user) {
-          // Create Stripe customer after successful signup
-          await createStripeCustomer(signUpData.user.id, signUpData.user.email || email);
+        if (signUpError) {
+          console.error('Signup error:', signUpError);
+          throw signUpError;
         }
         
-        toast({
-          title: "Account created",
-          description: "Please check your email to confirm your account.",
-        });
+        if (signUpData.user) {
+          console.log('User created successfully:', signUpData.user.id);
+          // Create Stripe customer after successful signup
+          await createStripeCustomer(signUpData.user.id, signUpData.user.email || email);
+          
+          toast({
+            title: "Account created",
+            description: "Please check your email to confirm your account.",
+          });
+        } else {
+          throw new Error('User data not returned from signup');
+        }
       } else {
         const { error } = await supabase.auth.signInWithPassword({
           email,
@@ -79,6 +104,7 @@ const Auth = () => {
         navigate("/");
       }
     } catch (error: any) {
+      console.error('Auth error:', error);
       toast({
         variant: "destructive",
         title: "Authentication error",
