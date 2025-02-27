@@ -1,0 +1,19 @@
+retell-calls supa function modify
+
+added cases
+
+getApiKey,
+getCall,
+createPhoneNumbers,
+CreatePhoneCall,
+listAgents,
+validatePhoneNumber,
+createPhoneNumber,
+imprtPhoneNumber
+
+
+//This was my first attempt to defeat the bug.
+//If I had redeployed the retell-calls supa function, this attempt would have been successful. However, to run it from the command line, I had //to burn my Linux system, which was a lot of work.
+//So I decided to try the second method.
+//I made a major modification to all the files, so that most of the work would not depend on the supa base function. I removed the supa //function calls and tried to communicate directly with retellai.com using RestFul.
+//This was successful and I was happy to finish the work.
