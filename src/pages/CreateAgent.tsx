@@ -80,34 +80,34 @@ const ambientSounds = [
 ];
 
 const llmVoices = [
-  { id: "9BWtsMINqrJLrRacOk9x", name: "Aria" },
-  { id: "CwhRBWXzGAHq8TQ4Fs17", name: "Roger" },
-  { id: "EXAVITQu4vr4xnSDxMaL", name: "Sarah" },
-  { id: "FGY2WhTYpPnrIDTdsKH5", name: "Laura" },
-  { id: "IKne3meq5aSn9XLyUdCD", name: "Charlie" },
-  { id: "JBFqnCBsd6RMkjVDRZzb", name: "George" },
-  { id: "N2lVS1w4EtoT3dr4eOWO", name: "Callum" },
-  { id: "SAz9YHcvj6GT2YYXdXww", name: "River" },
-  { id: "TX3LPaxmHKxFdv7VOQHJ", name: "Liam" },
-  { id: "XB0fDUnXU5powFXDhCwa", name: "Charlotte" },
-  { id: "Xb7hH8MSUJpSbSDYk0k2", name: "Alice" },
-  { id: "XrExE9yKIg1WjnnlVkGX", name: "Matilda" },
-  { id: "bIHbv24MWmeRgasZH58o", name: "Will" },
-  { id: "cgSgspJ2msm6clMCkdW9", name: "Jessica" },
-  { id: "cjVigY5qzO86Huf0OWal", name: "Eric" },
-  { id: "iP95p4xoKVk53GoZ742B", name: "Chris" },
-  { id: "nPczCjzI2devNBz1zQrb", name: "Brian" },
-  { id: "onwK4e9ZLuTAKqWW03F9", name: "Daniel" },
-  { id: "pFZP5JQG7iQjIQuC4Bku", name: "Lily" },
-  { id: "pqHfZKP75CvOlQylNhV4", name: "Bill" }
+  { id: "play-Andrew", name: "Andrew" },
+  { id: "11labs-Dorothy", name: "Dorothy" },
+  { id: "play-Steve", name: "Steve" },
+  { id: "openai-Nova", name: "Nova" },
+  { id: "11labs-Anthony", name: "Anthony" },
+  { id: "11labs-Billy", name: "Billy" },
+  { id: "11labs-Lily", name: "Lily" },
+  { id: "play-Alfonso", name: "Alfonso" },
+  { id: "11labs-Marissa", name: "Marissa" },
+  { id: "11labs-Amy", name: "Amy(UK)" },
+  { id: "11labs-Bing", name: "Bing" },
+  { id: "play-Zuri", name: "Zuri" },
+  { id: "play-Nina", name: "Nina" },
+  { id: "play-Myra", name: "Myra" },
+  { id: "play-James", name: "James" },
+  { id: "11labs-Jenny", name: "Jenny" },
+  { id: "11labs-Lucas", name: "Lucas" },
+  { id: "11labs-Samad", name: "Samad (en-IN)" },
+  { id: "11labs-Brian", name: "Brian" },
+  { id: "11labs-Kate", name: "Kate" }
 ];
 
 const llmOptions = [
-  { id: "llm_default_conversation", name: "Default Conversation" },
-  { id: "llm_customer_service", name: "Customer Service" },
-  { id: "llm_sales", name: "Sales Representative" },
-  { id: "llm_technical_support", name: "Technical Support" },
-  { id: "llm_healthcare", name: "Healthcare Assistant" }
+  { id: "llm_df70883b8a11aa8d96b5fbc522f2", name: "Default Conversation" },
+  { id: "llm_bb0951fa5b938ee674f9d445eca4", name: "Customer Service" },
+  { id: "llm_acb9a357fae1154c587b9c599cb1", name: "Sales Representative" },
+  { id: "llm_5f23834a1e91167bc63041843ec2", name: "Technical Support" },
+  { id: "llm_5f23834a1e91167bc63041843ec2", name: "Healthcare Assistant" }
 ];
 
 export default function CreateAgent() {
@@ -116,7 +116,7 @@ export default function CreateAgent() {
   const [formData, setFormData] = useState<AgentForm>({
     response_engine: {
       type: "retell-llm",
-      llm_id: "gpt4o"
+      llm_id: "gpt-4o"
     },
     voice_id: "",
     agent_name: "",
